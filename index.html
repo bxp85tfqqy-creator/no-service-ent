@@ -3404,6 +3404,15 @@
 
     }
 
+    function shouldBlockZoomOut() {
+
+      return (
+        portfolioState.activeMode === "WORK" ||
+        portfolioInterface.scrollTop > 0
+      );
+
+    }
+
 
     function smoothStep(
       start,
@@ -3921,6 +3930,10 @@
     let touchStartProgress = 0;
     let touchVelocity = 0;
     let lastTouchTimestamp = 0;
+    let touchZoomOutLocked = false;
+    let touchStartedBelowTop = false;
+    let wheelZoomOutLocked = false;
+    let wheelReleaseTimer = null;
 
     window.addEventListener(
       "wheel",
@@ -3936,14 +3949,21 @@
 
         }
 
+        if (wheelReleaseTimer !== null) {
+          window.clearTimeout(wheelReleaseTimer);
+        }
+
+        wheelReleaseTimer = window.setTimeout(() => {
+          wheelZoomOutLocked = false;
+          wheelReleaseTimer = null;
+        }, 180);
+
 
         if (
-          portfolioState.activeMode === "WORK" &&
           event.deltaY < 0 &&
-          portfolioInterface.scrollTop > 0 &&
-          scrollProgress > 0.01
+          (wheelZoomOutLocked || shouldBlockZoomOut())
         ) {
-
+          wheelZoomOutLocked = true;
           return;
 
         }
@@ -3984,6 +4004,8 @@
         touchLastY = touch.clientY;
         touchStartProgress = targetScrollProgress;
         touchVelocity = 0;
+        touchZoomOutLocked = false;
+        touchStartedBelowTop = portfolioInterface.scrollTop > 0;
         lastTouchTimestamp = performance.now();
 
       },
@@ -4012,11 +4034,14 @@
         const elapsed = Math.max(16, now - lastTouchTimestamp);
 
         if (
-          portfolioState.activeMode === "WORK" &&
           deltaY > 0 &&
-          portfolioInterface.scrollTop > 0 &&
-          scrollProgress > 0.01
+          (
+            touchZoomOutLocked ||
+            touchStartedBelowTop ||
+            shouldBlockZoomOut()
+          )
         ) {
+          touchZoomOutLocked = true;
           touchStartY = touch.clientY;
           touchStartProgress = targetScrollProgress;
           touchLastY = touch.clientY;
@@ -4045,8 +4070,12 @@
         touchStartY = 0;
         touchLastY = 0;
         touchStartProgress = 0;
-        targetScrollProgress = clamp01(targetScrollProgress + touchVelocity * 0.04);
+        if (!touchZoomOutLocked) {
+          targetScrollProgress = clamp01(targetScrollProgress + touchVelocity * 0.04);
+        }
         touchVelocity = 0;
+        touchZoomOutLocked = false;
+        touchStartedBelowTop = false;
         lastTouchTimestamp = 0;
       },
       {
