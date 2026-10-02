@@ -2656,6 +2656,7 @@
           localPath: videoPath,
           poster: footagePosterFiles.get(videoPath) || "",
           name,
+          previewTime: name === "DURUS.mp4" ? 4 : null,
           project: project.title,
           category: project.subtitle
         };
@@ -2729,7 +2730,7 @@
                 type="button"
                 data-footage-index="${footageData.indexOf(footage)}"
                 aria-label="Play ${footage.name}">
-                <video${footage.poster ? ` poster="${footage.poster}" data-poster-src="${footage.poster}"` : ""} muted loop playsinline preload="none" data-src="${footage.path}" data-local-src="${footage.localPath}"></video>
+                <video${footage.poster ? ` poster="${footage.poster}" data-poster-src="${footage.poster}"` : ""} muted loop playsinline preload="none" data-src="${footage.path}" data-local-src="${footage.localPath}"${footage.previewTime !== null ? ` data-preview-time="${footage.previewTime}"` : ""}></video>
               </button>
             `).join("")}
           </div>
@@ -2808,10 +2809,24 @@
       }
 
       viewerVideo.pause();
-      viewerVideo.currentTime = 0;
 
       if (activeFootageViewer) {
         const { video, placeholder, originalViewerVideo, preload } = activeFootageViewer;
+        if (video.dataset.previewTime) {
+          const previewTime = Number(video.dataset.previewTime);
+          if (Math.abs(video.currentTime - previewTime) > 0.05) {
+            video.dataset.previewFrameReady = "false";
+            video.addEventListener("seeked", () => {
+              video.dataset.previewFrameReady = "true";
+              scheduleFootagePreviewUpdate();
+            }, { once: true });
+            video.currentTime = previewTime;
+          } else {
+            video.dataset.previewFrameReady = "true";
+          }
+        } else {
+          video.currentTime = 0;
+        }
         video.id = "";
         video.classList.remove("viewer-video");
         video.loop = true;
@@ -2822,6 +2837,8 @@
         placeholder.replaceWith(video);
         activeFootageViewer = null;
         scheduleFootagePreviewUpdate();
+      } else {
+        viewerVideo.currentTime = 0;
       }
 
       if (typeof viewer.close === "function") {
@@ -2945,6 +2962,21 @@
         video.addEventListener("loadeddata", () => {
           video.dataset.mediaLoaded = "true";
           scheduleFootagePreviewUpdate();
+        });
+        video.addEventListener("loadedmetadata", () => {
+          if (!video.dataset.previewTime) {
+            return;
+          }
+
+          video.pause();
+          video.addEventListener("seeked", () => {
+            video.dataset.previewFrameReady = "true";
+            scheduleFootagePreviewUpdate();
+          }, { once: true });
+          video.currentTime = Math.min(
+            Number(video.dataset.previewTime),
+            Math.max(0, video.duration - 0.1)
+          );
         });
         video.addEventListener("canplay", scheduleFootagePreviewUpdate);
         video.addEventListener("play", () => {
@@ -3129,6 +3161,11 @@
         if (!video.hasAttribute("src")) {
           pendingFootageLoads.add(video);
           scheduleFootageLoadDrain();
+        } else if (
+          video.dataset.previewTime &&
+          video.dataset.previewFrameReady !== "true"
+        ) {
+          video.pause();
         } else if (!prefersReducedMotion && video.paused && video.dataset.mediaFailed !== "true") {
           video.preload = "auto";
           video.play().catch((error) => {
