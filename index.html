@@ -4010,6 +4010,19 @@
         const deltaY = touch.clientY - touchLastY;
         const elapsed = Math.max(16, now - lastTouchTimestamp);
 
+        if (
+          portfolioState.activeMode === "WORK" &&
+          deltaY > 0 &&
+          scrollProgress > 0.01
+        ) {
+          touchStartY = touch.clientY;
+          touchStartProgress = targetScrollProgress;
+          touchLastY = touch.clientY;
+          touchVelocity = 0;
+          lastTouchTimestamp = now;
+          return;
+        }
+
         touchVelocity = ((touchLastY - touch.clientY) / elapsed) * 16;
 
         const screenDrag = (touchStartY - touch.clientY) / Math.max(window.innerHeight * 0.82, 1);
