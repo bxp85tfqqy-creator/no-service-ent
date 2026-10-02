@@ -3029,6 +3029,25 @@
         });
       }
 
+      if (window.matchMedia("(max-width: 600px)").matches) {
+        const rootBounds = portfolioInterface.getBoundingClientRect();
+        const firstVisibleVideo = videos
+          .filter((video) => {
+            const bounds = video.getBoundingClientRect();
+            return (
+              bounds.bottom > rootBounds.top &&
+              bounds.top < rootBounds.bottom &&
+              bounds.right > rootBounds.left &&
+              bounds.left < rootBounds.right
+            );
+          })
+          .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second))[0];
+
+        if (firstVisibleVideo) {
+          startFootageVideoLoad(firstVisibleVideo);
+        }
+      }
+
       videos.forEach((video) => {
         if (!video.hasAttribute("src") && video.dataset.mediaFailed !== "true") {
           footageNearObserver.observe(video);
