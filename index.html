@@ -2948,6 +2948,19 @@
           return;
         }
 
+        if (window.matchMedia("(max-width: 600px)").matches) {
+          const bounds = video.getBoundingClientRect();
+          const rootBounds = portfolioInterface.getBoundingClientRect();
+          if (
+            bounds.bottom <= rootBounds.top ||
+            bounds.top >= rootBounds.bottom ||
+            bounds.right <= rootBounds.left ||
+            bounds.left >= rootBounds.right
+          ) {
+            return;
+          }
+        }
+
         pendingFootageLoads.add(video);
         scheduleFootageLoadDrain();
       };
@@ -3044,6 +3057,7 @@
           .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second))[0];
 
         if (firstVisibleVideo) {
+          firstVisibleVideo.preload = "auto";
           startFootageVideoLoad(firstVisibleVideo);
         }
       }
@@ -3167,13 +3181,14 @@
         ? visibleVideos.slice(0, maxPlayingVideos)
         : [];
       const activeVideoSet = new Set(activeVideos);
+      const isMobileViewport = window.matchMedia("(max-width: 600px)").matches;
 
       document.querySelectorAll(".footage-card video").forEach((video) => {
         if (!activeVideoSet.has(video) && !video.paused) {
           video.pause();
         }
         if (!activeVideoSet.has(video)) {
-          video.preload = "none";
+          video.preload = isMobileViewport && video.hasAttribute("src") ? "metadata" : "none";
         }
       });
 
