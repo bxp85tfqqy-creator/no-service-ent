@@ -2925,7 +2925,6 @@
         if (
           portfolioState.activeMode !== "WORK" ||
           document.getElementById("projectViewer")?.open ||
-          prefersReducedMotion ||
           video.hasAttribute("src") ||
           video.dataset.mediaFailed === "true"
         ) {
@@ -2947,8 +2946,9 @@
           video.dataset.mediaLoaded = "true";
           scheduleFootagePreviewUpdate();
         });
+        video.addEventListener("canplay", scheduleFootagePreviewUpdate);
         video.addEventListener("play", () => {
-          video.closest(".footage-card")?.classList.add("is-playing");
+        video.closest(".footage-card")?.classList.add("is-playing");
         });
         video.addEventListener("pause", () => {
           video.closest(".footage-card")?.classList.remove("is-playing");
@@ -3069,7 +3069,7 @@
         return;
       }
 
-      video.preload = "metadata";
+      video.preload = visibleFootageVideos.has(video) ? "auto" : "metadata";
       video.dataset.localFallback = "false";
       video.dataset.sourceAttempt = "remote";
       video.src = video.dataset.src;
@@ -3112,7 +3112,6 @@
       const maxPlayingVideos = window.matchMedia("(max-width: 600px)").matches ? 1 : 2;
       const activeVideos = (
         portfolioState.activeMode === "WORK" &&
-        !prefersReducedMotion &&
         !document.hidden &&
         !document.getElementById("projectViewer")?.open
       )
@@ -3130,14 +3129,15 @@
         if (!video.hasAttribute("src")) {
           pendingFootageLoads.add(video);
           scheduleFootageLoadDrain();
-        } else if (
-          video.dataset.mediaLoaded === "true" &&
-          video.paused &&
-          video.dataset.mediaFailed !== "true"
-        ) {
+        } else if (!prefersReducedMotion && video.paused && video.dataset.mediaFailed !== "true") {
+          video.preload = "auto";
           video.play().catch((error) => {
-            console.warn(`Footage preview playback was blocked for "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown footage"}".`, error);
+            if (error.name !== "AbortError") {
+              console.warn(`Footage preview playback was blocked for "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown footage"}".`, error);
+            }
           });
+        } else if (prefersReducedMotion) {
+          video.preload = "auto";
         }
       });
     }
@@ -3187,7 +3187,6 @@
       if (
         portfolioState.activeMode === "WORK" &&
         !document.getElementById("projectViewer")?.open &&
-        !prefersReducedMotion &&
         !video.hasAttribute("src") &&
         video.dataset.mediaFailed !== "true"
       ) {
