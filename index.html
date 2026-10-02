@@ -2442,12 +2442,8 @@
 
   <script type="module">
 
-    import * as THREE from "three";
-
-    import {
-      GLTFLoader
-    }
-    from "three/addons/loaders/GLTFLoader.js";
+    let THREE;
+    let GLTFLoader;
 
 
     /* =====================================================
@@ -2712,7 +2708,7 @@
                 type="button"
                 data-footage-index="${footageData.indexOf(footage)}"
                 aria-label="Play ${footage.name}">
-                <video muted loop playsinline preload="metadata" src="${footage.path}" data-local-src="${footage.localPath}" data-thumbnail-time="${footage.name === "Hair OIl.mp4" ? 2 : ""}"></video>
+                <video muted loop playsinline preload="none" data-src="${footage.path}" data-local-src="${footage.localPath}" data-thumbnail-time="${footage.name === "Hair OIl.mp4" ? 2 : ""}"></video>
               </button>
             `).join("")}
           </div>
@@ -2856,7 +2852,17 @@
     }
 
     function prepareFootageThumbnails() {
-      document.querySelectorAll(".footage-card video").forEach((video) => {
+      const videos = [...document.querySelectorAll(".footage-card video")];
+      const loadThumbnail = (video) => {
+        if (video.hasAttribute("src")) {
+          return;
+        }
+
+        video.src = video.dataset.src;
+        video.load();
+      };
+
+      videos.forEach((video) => {
         video.addEventListener("error", () => {
           if (video.dataset.localFallback === "true") {
             return;
@@ -2864,6 +2870,7 @@
 
           video.dataset.localFallback = "true";
           video.src = video.dataset.localSrc;
+          video.load();
         }, { once: true });
 
         const setThumbnailFrame = () => {
@@ -2880,12 +2887,28 @@
           video.dataset.thumbnailReady = "true";
         }, { once: true });
 
-        if (video.readyState >= 1) {
-          setThumbnailFrame();
-        } else {
-          video.addEventListener("loadedmetadata", setThumbnailFrame, { once: true });
-        }
+        video.addEventListener("loadedmetadata", setThumbnailFrame, { once: true });
       });
+
+      if (!("IntersectionObserver" in window)) {
+        videos.forEach(loadThumbnail);
+        return;
+      }
+
+      const thumbnailObserver = new IntersectionObserver((entries, observer) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            observer.unobserve(entry.target);
+            loadThumbnail(entry.target);
+          }
+        });
+      }, {
+        root: portfolioInterface,
+        rootMargin: "80px 0px",
+        threshold: 0
+      });
+
+      videos.forEach((video) => thumbnailObserver.observe(video));
     }
 
     function buildAboutView() {
@@ -3013,6 +3036,13 @@
       }
 
       bindPortfolioControls();
+
+      if (
+        portfolioState.activeMode === "WORK" &&
+        portfolioInterface.classList.contains("revealed")
+      ) {
+        prepareFootageThumbnails();
+      }
     }
 
     function setActiveSection(nextSection) {
@@ -3165,8 +3195,6 @@
         });
       }
 
-      prepareFootageThumbnails();
-
     }
 
     portfolioButtons.forEach((button) => {
@@ -3314,6 +3342,32 @@
 
     let renderer;
 
+    let rotationAmount;
+
+    let lensStartPosition;
+
+    let lensStartRotation;
+
+    let batteryStartPosition;
+
+    let batteryStartRotation;
+
+    let lcdStartRotation;
+
+    let cameraStartPosition;
+
+    let cameraStartTarget;
+
+    let lcdWorldCenter;
+
+    let cameraPushDirection;
+
+    let lcdWorldBounds;
+
+    let lcdWorldSize;
+
+    let cameraPushPosition;
+
     let camcorder = null;
 
     let lcdDoorMaterials = [];
@@ -3340,73 +3394,13 @@
 
     /* STOP AT THE SCREEN VIEW */
 
-    const rotationAmount =
-      THREE.MathUtils.degToRad(
-        220
-      );
-
-
-    /* ORIGINAL TRANSFORMS */
-
-    const lensStartPosition =
-      new THREE.Vector3();
-
-    const lensStartRotation =
-      new THREE.Euler();
-
-
-    const batteryStartPosition =
-      new THREE.Vector3();
-
-    const batteryStartRotation =
-      new THREE.Euler();
-
-
-    /*
-       LCD original rotation.
-
-       We save it so scrolling back up
-       returns the LCD exactly where
-       the model started.
-    */
-
-    const lcdStartRotation =
-      new THREE.Euler();
-
-    const cameraStartPosition =
-      new THREE.Vector3();
-
-    const cameraStartTarget =
-      new THREE.Vector3();
-
-    const lcdWorldCenter =
-      new THREE.Vector3();
-
-    const cameraPushDirection =
-      new THREE.Vector3();
-
-    const lcdWorldBounds =
-      new THREE.Box3();
-
-    const lcdWorldSize =
-      new THREE.Vector3();
-
-    const cameraPushPosition =
-      new THREE.Vector3();
-
-
-
     /* =====================================================
        HELPERS
     ====================================================== */
 
     function clamp01(value) {
 
-      return THREE.MathUtils.clamp(
-        value,
-        0,
-        1
-      );
+      return Math.min(1, Math.max(0, value));
 
     }
 
@@ -3445,7 +3439,28 @@
        INITIALIZE THREE
     ====================================================== */
 
-    function initializeThree() {
+    async function initializeThree() {
+
+      const [threeModule, loaderModule] = await Promise.all([
+        import("three"),
+        import("three/addons/loaders/GLTFLoader.js")
+      ]);
+
+      THREE = threeModule;
+      GLTFLoader = loaderModule.GLTFLoader;
+      rotationAmount = THREE.MathUtils.degToRad(220);
+      lensStartPosition = new THREE.Vector3();
+      lensStartRotation = new THREE.Euler();
+      batteryStartPosition = new THREE.Vector3();
+      batteryStartRotation = new THREE.Euler();
+      lcdStartRotation = new THREE.Euler();
+      cameraStartPosition = new THREE.Vector3();
+      cameraStartTarget = new THREE.Vector3();
+      lcdWorldCenter = new THREE.Vector3();
+      cameraPushDirection = new THREE.Vector3();
+      lcdWorldBounds = new THREE.Box3();
+      lcdWorldSize = new THREE.Vector3();
+      cameraPushPosition = new THREE.Vector3();
 
       scene =
         new THREE.Scene();
@@ -4409,10 +4424,17 @@
         }
       );
 
-      portfolioInterface.classList.toggle(
-        "revealed",
-        pushProgress >= 0.92
-      );
+      const interfaceRevealed = pushProgress >= 0.92;
+      const wasInterfaceRevealed = portfolioInterface.classList.contains("revealed");
+      portfolioInterface.classList.toggle("revealed", interfaceRevealed);
+
+      if (
+        interfaceRevealed &&
+        !wasInterfaceRevealed &&
+        portfolioState.activeMode === "WORK"
+      ) {
+        prepareFootageThumbnails();
+      }
 
     }
 
@@ -4486,6 +4508,12 @@
           "active"
         );
 
+        if (!renderer) {
+          initializeThree().catch((error) => {
+            console.error("THREE INITIALIZATION ERROR:", error);
+          });
+        }
+
 
         transmission.classList.add(
           "entering"
@@ -4551,8 +4579,6 @@
     /* =====================================================
        START
     ====================================================== */
-
-    initializeThree();
 
   </script>
 
