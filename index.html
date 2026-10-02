@@ -2987,14 +2987,13 @@
         });
       });
 
-      if (!footageFallbackScrollBound) {
-        footageFallbackScrollBound = true;
-        portfolioInterface.addEventListener("scroll", scheduleFootageFallbackScan, { passive: true });
-        window.addEventListener("resize", scheduleFootageFallbackScan, { passive: true });
-      }
-      scheduleFootageFallbackScan();
-
       if (!("IntersectionObserver" in window)) {
+        if (!footageFallbackScrollBound) {
+          footageFallbackScrollBound = true;
+          portfolioInterface.addEventListener("scroll", scheduleFootageFallbackScan, { passive: true });
+          window.addEventListener("resize", scheduleFootageFallbackScan, { passive: true });
+        }
+        scheduleFootageFallbackScan();
         return;
       }
 
@@ -3101,7 +3100,6 @@
         return;
       }
 
-      video.preload = visibleFootageVideos.has(video) ? "auto" : "metadata";
       video.dataset.localFallback = "false";
       video.dataset.sourceAttempt = "remote";
       video.src = video.dataset.src;
@@ -3155,9 +3153,13 @@
         if (!activeVideoSet.has(video) && !video.paused) {
           video.pause();
         }
+        if (!activeVideoSet.has(video)) {
+          video.preload = "none";
+        }
       });
 
       activeVideos.forEach((video) => {
+        video.preload = "auto";
         if (!video.hasAttribute("src")) {
           pendingFootageLoads.add(video);
           scheduleFootageLoadDrain();
@@ -3167,14 +3169,11 @@
         ) {
           video.pause();
         } else if (!prefersReducedMotion && video.paused && video.dataset.mediaFailed !== "true") {
-          video.preload = "auto";
           video.play().catch((error) => {
             if (error.name !== "AbortError") {
               console.warn(`Footage preview playback was blocked for "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown footage"}".`, error);
             }
           });
-        } else if (prefersReducedMotion) {
-          video.preload = "auto";
         }
       });
     }
