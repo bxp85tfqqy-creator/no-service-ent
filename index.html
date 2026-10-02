@@ -3527,36 +3527,46 @@
             );
 
 
-          lcdParent.traverse(
-            (part) => {
+          if (lcdParent) {
 
-              if (
-                !part.isMesh ||
-                !part.material
-              ) {
+            lcdParent.traverse(
+              (part) => {
 
-                return;
+                if (
+                  !part.isMesh ||
+                  !part.material
+                ) {
 
-              }
-
-              const materials =
-                Array.isArray(part.material)
-                  ? part.material
-                  : [part.material];
-
-              materials.forEach(
-                (material) => {
-
-                  material.transparent = true;
-                  lcdDoorMaterials.push(
-                    material
-                  );
+                  return;
 
                 }
-              );
 
-            }
-          );
+                const materials =
+                  Array.isArray(part.material)
+                    ? part.material
+                    : [part.material];
+
+                materials.forEach(
+                  (material) => {
+
+                    material.transparent = true;
+                    lcdDoorMaterials.push(
+                      material
+                    );
+
+                  }
+                );
+
+              }
+            );
+
+          } else {
+
+            console.error(
+              "CAMCORDER PART MISSING: Empty_21; LCD animation unavailable."
+            );
+
+          }
 
 
           lcdDisplay =
