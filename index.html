@@ -2677,10 +2677,10 @@
     let activeFootageViewer = null;
     const visibleFootageVideos = new Set();
     const pendingFootageLoads = new Set();
+    const footageLoadsInProgress = new Set();
+    const maxConcurrentFootageLoads = 2;
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let footageNearObserver = null;
     let footageVisibilityObserver = null;
-    let footageLoadIdleScheduled = false;
     let footagePreviewFrame = null;
     let footageFallbackScrollFrame = null;
     let footageFallbackScrollBound = false;
@@ -2743,7 +2743,7 @@
       const footage = footageData[footageIndex];
       const viewer = document.getElementById("projectViewer");
       const fallbackViewerVideo = document.getElementById("viewerVideo");
-      const cardVideo = button.querySelector(".footage-card video");
+      const cardVideo = button.querySelector("video");
 
       if (!viewer || !fallbackViewerVideo || !footage) {
         return;
@@ -2844,6 +2844,7 @@
       if (typeof viewer.close === "function") {
         viewer.close();
       }
+      scheduleFootageLoadDrain();
     }
 
     function formatViewerTime(time) {
@@ -2938,39 +2939,6 @@
 
     function prepareFootageThumbnails() {
       const videos = [...document.querySelectorAll(".footage-card video")];
-      const scheduleNearbyLoad = (video) => {
-        if (
-          portfolioState.activeMode !== "WORK" ||
-          document.getElementById("projectViewer")?.open ||
-          video.hasAttribute("src") ||
-          video.dataset.mediaFailed === "true"
-        ) {
-          return;
-        }
-
-        if (window.matchMedia("(max-width: 600px)").matches) {
-          const rootBounds = portfolioInterface.getBoundingClientRect();
-          const nearestVisibleVideo = videos
-            .filter((candidate) => {
-              const bounds = candidate.getBoundingClientRect();
-              return (
-                bounds.bottom > rootBounds.top &&
-                bounds.top < rootBounds.bottom &&
-                bounds.right > rootBounds.left &&
-                bounds.left < rootBounds.right
-              );
-            })
-            .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second))[0];
-
-          if (video !== nearestVisibleVideo) {
-            return;
-          }
-        }
-
-        pendingFootageLoads.add(video);
-        scheduleFootageLoadDrain();
-      };
-
       videos.forEach((video) => {
         if (video.dataset.mediaHandlersBound === "true") {
           return;
@@ -2980,6 +2948,10 @@
         video.addEventListener("error", () => handleFootageVideoError(video));
         video.addEventListener("loadeddata", () => {
           video.dataset.mediaLoaded = "true";
+          if (video !== activeFootageViewer?.video) {
+            video.preload = "metadata";
+          }
+          finishFootageVideoLoad(video);
           scheduleFootagePreviewUpdate();
         });
         video.addEventListener("loadedmetadata", () => {
@@ -3006,73 +2978,42 @@
         });
       });
 
-      if (!("IntersectionObserver" in window)) {
+      if ("IntersectionObserver" in window) {
+        if (!footageVisibilityObserver) {
+          footageVisibilityObserver = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                visibleFootageVideos.add(entry.target);
+              } else {
+                visibleFootageVideos.delete(entry.target);
+              }
+            });
+            scheduleFootagePreviewUpdate();
+          }, {
+            root: portfolioInterface,
+            rootMargin: "0px",
+            threshold: 0
+          });
+        }
+
+        videos.forEach((video) => footageVisibilityObserver.observe(video));
+      } else {
         if (!footageFallbackScrollBound) {
           footageFallbackScrollBound = true;
           portfolioInterface.addEventListener("scroll", scheduleFootageFallbackScan, { passive: true });
           window.addEventListener("resize", scheduleFootageFallbackScan, { passive: true });
         }
         scheduleFootageFallbackScan();
-        return;
-      }
-
-      if (!footageNearObserver) {
-        footageNearObserver = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              scheduleNearbyLoad(entry.target);
-            }
-          });
-        }, {
-          root: portfolioInterface,
-          rootMargin: "300px 0px",
-          threshold: 0
-        });
-      }
-
-      if (!footageVisibilityObserver) {
-        footageVisibilityObserver = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              visibleFootageVideos.add(entry.target);
-              scheduleNearbyLoad(entry.target);
-            } else {
-              visibleFootageVideos.delete(entry.target);
-            }
-          });
-          scheduleFootagePreviewUpdate();
-        }, {
-          root: portfolioInterface,
-          rootMargin: "0px",
-          threshold: 0
-        });
-      }
-
-      if (window.matchMedia("(max-width: 600px)").matches) {
-        const rootBounds = portfolioInterface.getBoundingClientRect();
-        const firstVisibleVideo = videos
-          .filter((video) => {
-            const bounds = video.getBoundingClientRect();
-            return (
-              bounds.bottom > rootBounds.top &&
-              bounds.top < rootBounds.bottom &&
-              bounds.right > rootBounds.left &&
-              bounds.left < rootBounds.right
-            );
-          })
-          .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second))[0];
-
-        if (firstVisibleVideo) {
-          firstVisibleVideo.preload = "auto";
-          startFootageVideoLoad(firstVisibleVideo);
-        }
       }
 
       videos.forEach((video) => {
-        if (!video.hasAttribute("src") && video.dataset.mediaFailed !== "true") {
-          footageNearObserver.observe(video);
+        if (
+          !video.hasAttribute("src") &&
+          video.dataset.mediaFailed !== "true" &&
+          !footageLoadsInProgress.has(video)
+        ) {
+          pendingFootageLoads.add(video);
         }
-        footageVisibilityObserver.observe(video);
       });
       if (!footageDocumentVisibilityBound) {
         footageDocumentVisibilityBound = true;
@@ -3091,7 +3032,6 @@
 
     function scheduleFootageLoadDrain() {
       if (
-        footageLoadIdleScheduled ||
         pendingFootageLoads.size === 0 ||
         portfolioState.activeMode !== "WORK" ||
         document.getElementById("projectViewer")?.open
@@ -3099,49 +3039,54 @@
         return;
       }
 
-      footageLoadIdleScheduled = true;
-      const drain = () => {
-        footageLoadIdleScheduled = false;
+      while (
+        footageLoadsInProgress.size < maxConcurrentFootageLoads &&
+        pendingFootageLoads.size > 0 &&
+        portfolioState.activeMode === "WORK" &&
+        !document.getElementById("projectViewer")?.open
+      ) {
+        const nextVideo = [...pendingFootageLoads].find((video) => (
+          video.isConnected &&
+          !video.hasAttribute("src") &&
+          video.dataset.mediaFailed !== "true"
+        ));
 
-        const nextVideo = [...pendingFootageLoads]
-          .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second))
-          .find((video) => (
-            video.isConnected &&
-            !video.hasAttribute("src") &&
-            video.dataset.mediaFailed !== "true"
-          ));
-
-        if (nextVideo) {
-          pendingFootageLoads.delete(nextVideo);
-          startFootageVideoLoad(nextVideo);
+        if (!nextVideo) {
+          pendingFootageLoads.clear();
+          break;
         }
 
-        if (pendingFootageLoads.size > 0) {
-          scheduleFootageLoadDrain();
+        pendingFootageLoads.delete(nextVideo);
+        if (!startFootageVideoLoad(nextVideo)) {
+          finishFootageVideoLoad(nextVideo);
         }
-      };
-
-      if ("requestIdleCallback" in window) {
-        window.requestIdleCallback(drain, { timeout: 1000 });
-      } else {
-        window.setTimeout(drain, 100);
       }
     }
 
     function startFootageVideoLoad(video) {
       if (video.hasAttribute("src") || video.dataset.mediaFailed === "true") {
-        return;
+        return false;
       }
 
       if (!video.dataset.src) {
         video.dataset.mediaFailed = "true";
         console.warn(`Footage card "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown"}" has no video source.`);
-        return;
+        return false;
       }
 
+      pendingFootageLoads.delete(video);
+      footageLoadsInProgress.add(video);
       video.dataset.localFallback = "false";
       video.dataset.sourceAttempt = "remote";
+      video.preload = "auto";
       video.src = video.dataset.src;
+      return true;
+    }
+
+    function finishFootageVideoLoad(video) {
+      if (footageLoadsInProgress.delete(video)) {
+        scheduleFootageLoadDrain();
+      }
     }
 
     function handleFootageVideoError(video) {
@@ -3161,6 +3106,7 @@
       video.pause();
       video.closest(".footage-card")?.classList.remove("is-playing");
       console.warn(`Footage preview failed to load "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown footage"}". The card remains available to open in the viewer.`);
+      finishFootageVideoLoad(video);
     }
 
     function scheduleFootagePreviewUpdate() {
@@ -3220,7 +3166,6 @@
 
     function pauseFootagePreviews() {
       visibleFootageVideos.clear();
-      pendingFootageLoads.clear();
       document.querySelectorAll(".footage-card video").forEach((video) => {
         if (!video.paused) {
           video.pause();
@@ -3237,17 +3182,9 @@
       footageFallbackScrollFrame = window.requestAnimationFrame(() => {
         footageFallbackScrollFrame = null;
         const rootBounds = portfolioInterface.getBoundingClientRect();
-        const expandedTop = rootBounds.top - 300;
-        const expandedBottom = rootBounds.bottom + 300;
 
         document.querySelectorAll(".footage-card video").forEach((video) => {
           const bounds = video.getBoundingClientRect();
-          if (bounds.bottom >= expandedTop && bounds.top <= expandedBottom) {
-            if (!visibleFootageVideos.has(video)) {
-              scheduleFootageLoadFallback(video);
-            }
-          }
-
           const visible = bounds.bottom > rootBounds.top && bounds.top < rootBounds.bottom;
           if (visible) {
             visibleFootageVideos.add(video);
@@ -3257,18 +3194,6 @@
         });
         scheduleFootagePreviewUpdate();
       });
-    }
-
-    function scheduleFootageLoadFallback(video) {
-      if (
-        portfolioState.activeMode === "WORK" &&
-        !document.getElementById("projectViewer")?.open &&
-        !video.hasAttribute("src") &&
-        video.dataset.mediaFailed !== "true"
-      ) {
-        pendingFootageLoads.add(video);
-        scheduleFootageLoadDrain();
-      }
     }
 
     function bindFootageViewerClose(viewer) {
