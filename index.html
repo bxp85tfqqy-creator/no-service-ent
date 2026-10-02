@@ -1552,6 +1552,13 @@
 
     }
 
+    #projectViewer .viewer-video {
+      aspect-ratio: auto;
+      object-fit: contain;
+      filter: none;
+      pointer-events: auto;
+    }
+
 
     .viewer-controls {
 
@@ -2297,7 +2304,7 @@
 
     <dialog id="projectViewer" class="project-viewer" aria-label="Footage viewer">
       <button class="viewer-close" type="button" aria-label="Close footage viewer">CLOSE</button>
-      <video id="viewerVideo" class="viewer-video" autoplay playsinline controlslist="nodownload"></video>
+      <video id="viewerVideo" class="viewer-video" autoplay playsinline preload="none" controlslist="nodownload"></video>
       <div class="viewer-controls" aria-label="Footage playback controls">
         <button id="viewerPlayToggle" type="button" aria-label="Pause footage">PAUSE</button>
         <input id="viewerSeek" type="range" min="0" max="0" step="0.1" value="0" aria-label="Seek footage">
@@ -2560,6 +2567,7 @@
       ["display.mp4", "display.mp4"],
       ["truck.mp4", "truck.mp4"]
     ]);
+    const footagePosterFiles = new Map();
 
     const projectData = [
       {
@@ -2646,6 +2654,7 @@
             ? `${mediaBaseUrl}/${encodeURIComponent(remoteMediaFiles.get(name))}`
             : videoPath,
           localPath: videoPath,
+          poster: footagePosterFiles.get(videoPath) || "",
           name,
           project: project.title,
           category: project.subtitle
@@ -2663,6 +2672,18 @@
     const portfolioState = {
       activeMode: "WORK"
     };
+    let cachedWorkView = null;
+    let activeFootageViewer = null;
+    const visibleFootageVideos = new Set();
+    const pendingFootageLoads = new Set();
+    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let footageNearObserver = null;
+    let footageVisibilityObserver = null;
+    let footageLoadIdleScheduled = false;
+    let footagePreviewFrame = null;
+    let footageFallbackScrollFrame = null;
+    let footageFallbackScrollBound = false;
+    let footageDocumentVisibilityBound = false;
 
     const reviewData = [];
 
@@ -2708,7 +2729,7 @@
                 type="button"
                 data-footage-index="${footageData.indexOf(footage)}"
                 aria-label="Play ${footage.name}">
-                <video muted loop playsinline preload="none" data-src="${footage.path}" data-local-src="${footage.localPath}" data-thumbnail-time="${footage.name === "Hair OIl.mp4" ? 2 : ""}"></video>
+                <video${footage.poster ? ` poster="${footage.poster}" data-poster-src="${footage.poster}"` : ""} muted loop playsinline preload="none" data-src="${footage.path}" data-local-src="${footage.localPath}"></video>
               </button>
             `).join("")}
           </div>
@@ -2720,38 +2741,62 @@
       const footageIndex = Number(button.dataset.footageIndex);
       const footage = footageData[footageIndex];
       const viewer = document.getElementById("projectViewer");
-      const viewerVideo = document.getElementById("viewerVideo");
+      const fallbackViewerVideo = document.getElementById("viewerVideo");
+      const cardVideo = button.querySelector(".footage-card video");
 
-      if (!viewer || !viewerVideo || !footage) {
+      if (!viewer || !fallbackViewerVideo || !footage) {
         return;
       }
 
-      document.querySelectorAll(".footage-card video").forEach((otherVideo) => {
-        if (!otherVideo.paused) {
-          otherVideo.pause();
-        }
-        otherVideo.closest(".footage-card")?.classList.remove("is-playing");
-      });
+      pauseFootagePreviews();
 
-      viewerVideo.src = footage.path;
-      viewerVideo.dataset.localFallback = "false";
-      viewerVideo.onerror = () => {
-        if (viewerVideo.dataset.localFallback === "true") {
-          return;
+      let viewerVideo = fallbackViewerVideo;
+      if (cardVideo && cardVideo.dataset.mediaFailed !== "true") {
+        const placeholder = document.createComment("Footage video placeholder");
+        button.replaceChild(placeholder, cardVideo);
+        fallbackViewerVideo.replaceWith(cardVideo);
+        cardVideo.id = "viewerVideo";
+        cardVideo.classList.add("viewer-video");
+        cardVideo.loop = false;
+        cardVideo.muted = false;
+        cardVideo.volume = 1;
+        visibleFootageVideos.delete(cardVideo);
+        activeFootageViewer = {
+          video: cardVideo,
+          placeholder,
+          originalViewerVideo: fallbackViewerVideo,
+          preload: cardVideo.preload
+        };
+        viewerVideo = cardVideo;
+        if (!viewerVideo.hasAttribute("src")) {
+          startFootageVideoLoad(viewerVideo);
         }
+        viewerVideo.preload = "auto";
+      } else {
+        viewerVideo.preload = "auto";
+        const sameFootageSource = viewerVideo.dataset.footagePath === footage.path;
+        viewerVideo.onerror = () => {
+          if (viewerVideo.dataset.localFallback === "true") {
+            console.warn(`Footage viewer failed to load "${footage.name}" from the remote and local sources.`);
+            return;
+          }
 
-        viewerVideo.dataset.localFallback = "true";
-        viewerVideo.src = footage.localPath;
-        viewerVideo.play().catch(() => {});
-      };
+          viewerVideo.dataset.localFallback = "true";
+          viewerVideo.src = footage.localPath;
+          viewerVideo.play().catch(() => {});
+        };
+        if (!sameFootageSource) {
+          viewerVideo.dataset.footagePath = footage.path;
+          viewerVideo.dataset.localFallback = "false";
+          viewerVideo.src = footage.path;
+        }
+      }
       viewerVideo.muted = false;
       viewerVideo.volume = 1;
       viewerVideo.currentTime = 0;
+      viewer.showModal?.();
       viewerVideo.play().catch(() => {});
-
-      if (typeof viewer.showModal === "function") {
-        viewer.showModal();
-      }
+      updateViewerControls();
     }
 
     function closeFootageViewer() {
@@ -2764,6 +2809,20 @@
 
       viewerVideo.pause();
       viewerVideo.currentTime = 0;
+
+      if (activeFootageViewer) {
+        const { video, placeholder, originalViewerVideo, preload } = activeFootageViewer;
+        video.id = "";
+        video.classList.remove("viewer-video");
+        video.loop = true;
+        video.muted = true;
+        video.volume = 1;
+        video.preload = preload;
+        video.replaceWith(originalViewerVideo);
+        placeholder.replaceWith(video);
+        activeFootageViewer = null;
+        scheduleFootagePreviewUpdate();
+      }
 
       if (typeof viewer.close === "function") {
         viewer.close();
@@ -2781,7 +2840,7 @@
     }
 
     function updateViewerControls() {
-      const video = document.getElementById("viewerVideo");
+      const video = document.querySelector("#projectViewer video");
       const playToggle = document.getElementById("viewerPlayToggle");
       const muteToggle = document.getElementById("viewerMuteToggle");
       const fullscreenToggle = document.getElementById("viewerFullscreenToggle");
@@ -2804,21 +2863,22 @@
     }
 
     function bindViewerPlaybackControls() {
-      const video = document.getElementById("viewerVideo");
       const dialog = document.getElementById("projectViewer");
       const playToggle = document.getElementById("viewerPlayToggle");
       const muteToggle = document.getElementById("viewerMuteToggle");
       const fullscreenToggle = document.getElementById("viewerFullscreenToggle");
       const seek = document.getElementById("viewerSeek");
 
-      video.addEventListener("play", updateViewerControls);
-      video.addEventListener("pause", updateViewerControls);
-      video.addEventListener("timeupdate", updateViewerControls);
-      video.addEventListener("loadedmetadata", updateViewerControls);
-      video.addEventListener("volumechange", updateViewerControls);
+      ["play", "pause", "timeupdate", "loadedmetadata", "volumechange"].forEach((eventName) => {
+        dialog.addEventListener(eventName, updateViewerControls, true);
+      });
       document.addEventListener("fullscreenchange", updateViewerControls);
 
       playToggle.addEventListener("click", () => {
+        const video = document.querySelector("#projectViewer video");
+        if (!video) {
+          return;
+        }
         if (video.paused) {
           video.play().catch(() => {});
         } else {
@@ -2827,12 +2887,20 @@
       });
 
       seek.addEventListener("input", () => {
+        const video = document.querySelector("#projectViewer video");
+        if (!video) {
+          return;
+        }
         if (Number.isFinite(video.duration)) {
           video.currentTime = Number(seek.value);
         }
       });
 
       muteToggle.addEventListener("click", () => {
+        const video = document.querySelector("#projectViewer video");
+        if (!video) {
+          return;
+        }
         video.muted = !video.muted;
       });
 
@@ -2853,62 +2921,291 @@
 
     function prepareFootageThumbnails() {
       const videos = [...document.querySelectorAll(".footage-card video")];
-      const loadThumbnail = (video) => {
-        if (video.hasAttribute("src")) {
+      const scheduleNearbyLoad = (video) => {
+        if (
+          portfolioState.activeMode !== "WORK" ||
+          document.getElementById("projectViewer")?.open ||
+          prefersReducedMotion ||
+          video.hasAttribute("src") ||
+          video.dataset.mediaFailed === "true"
+        ) {
           return;
         }
 
-        video.src = video.dataset.src;
-        video.load();
+        pendingFootageLoads.add(video);
+        scheduleFootageLoadDrain();
       };
 
       videos.forEach((video) => {
-        video.addEventListener("error", () => {
-          if (video.dataset.localFallback === "true") {
-            return;
-          }
+        if (video.dataset.mediaHandlersBound === "true") {
+          return;
+        }
 
-          video.dataset.localFallback = "true";
-          video.src = video.dataset.localSrc;
-          video.load();
-        }, { once: true });
-
-        const setThumbnailFrame = () => {
-          if (Number.isFinite(video.duration) && video.duration > 0) {
-            const thumbnailTime = Number(video.dataset.thumbnailTime);
-            video.currentTime = video.dataset.thumbnailTime
-              ? Math.min(thumbnailTime, video.duration)
-              : video.duration / 2;
-            video.dataset.thumbnailReady = "false";
-          }
-        };
-
-        video.addEventListener("seeked", () => {
-          video.dataset.thumbnailReady = "true";
-        }, { once: true });
-
-        video.addEventListener("loadedmetadata", setThumbnailFrame, { once: true });
+        video.dataset.mediaHandlersBound = "true";
+        video.addEventListener("error", () => handleFootageVideoError(video));
+        video.addEventListener("loadeddata", () => {
+          video.dataset.mediaLoaded = "true";
+          scheduleFootagePreviewUpdate();
+        });
+        video.addEventListener("play", () => {
+          video.closest(".footage-card")?.classList.add("is-playing");
+        });
+        video.addEventListener("pause", () => {
+          video.closest(".footage-card")?.classList.remove("is-playing");
+        });
       });
 
+      if (!footageFallbackScrollBound) {
+        footageFallbackScrollBound = true;
+        portfolioInterface.addEventListener("scroll", scheduleFootageFallbackScan, { passive: true });
+        window.addEventListener("resize", scheduleFootageFallbackScan, { passive: true });
+      }
+      scheduleFootageFallbackScan();
+
       if (!("IntersectionObserver" in window)) {
-        videos.forEach(loadThumbnail);
         return;
       }
 
-      const thumbnailObserver = new IntersectionObserver((entries, observer) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            observer.unobserve(entry.target);
-            loadThumbnail(entry.target);
-          }
+      if (!footageNearObserver) {
+        footageNearObserver = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              scheduleNearbyLoad(entry.target);
+            }
+          });
+        }, {
+          root: portfolioInterface,
+          rootMargin: "300px 0px",
+          threshold: 0
         });
-      }, {
-        root: portfolioInterface,
-        rootMargin: "80px 0px",
-        threshold: 0
+      }
+
+      if (!footageVisibilityObserver) {
+        footageVisibilityObserver = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              visibleFootageVideos.add(entry.target);
+              scheduleNearbyLoad(entry.target);
+            } else {
+              visibleFootageVideos.delete(entry.target);
+            }
+          });
+          scheduleFootagePreviewUpdate();
+        }, {
+          root: portfolioInterface,
+          rootMargin: "0px",
+          threshold: 0
+        });
+      }
+
+      videos.forEach((video) => {
+        if (!video.hasAttribute("src") && video.dataset.mediaFailed !== "true") {
+          footageNearObserver.observe(video);
+        }
+        footageVisibilityObserver.observe(video);
+      });
+      if (!footageDocumentVisibilityBound) {
+        footageDocumentVisibilityBound = true;
+        document.addEventListener("visibilitychange", scheduleFootagePreviewUpdate);
+      }
+      scheduleFootageLoadDrain();
+    }
+
+    function getFootageViewportDistance(video) {
+      const videoBounds = video.getBoundingClientRect();
+      const viewportBounds = portfolioInterface.getBoundingClientRect();
+      const videoCenterY = videoBounds.top + videoBounds.height / 2;
+      const viewportCenterY = viewportBounds.top + viewportBounds.height / 2;
+      return Math.abs(videoCenterY - viewportCenterY);
+    }
+
+    function scheduleFootageLoadDrain() {
+      if (
+        footageLoadIdleScheduled ||
+        pendingFootageLoads.size === 0 ||
+        portfolioState.activeMode !== "WORK" ||
+        document.getElementById("projectViewer")?.open
+      ) {
+        return;
+      }
+
+      footageLoadIdleScheduled = true;
+      const drain = () => {
+        footageLoadIdleScheduled = false;
+
+        const nextVideo = [...pendingFootageLoads]
+          .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second))
+          .find((video) => (
+            video.isConnected &&
+            !video.hasAttribute("src") &&
+            video.dataset.mediaFailed !== "true"
+          ));
+
+        if (nextVideo) {
+          pendingFootageLoads.delete(nextVideo);
+          startFootageVideoLoad(nextVideo);
+        }
+
+        if (pendingFootageLoads.size > 0) {
+          scheduleFootageLoadDrain();
+        }
+      };
+
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(drain, { timeout: 1000 });
+      } else {
+        window.setTimeout(drain, 100);
+      }
+    }
+
+    function startFootageVideoLoad(video) {
+      if (video.hasAttribute("src") || video.dataset.mediaFailed === "true") {
+        return;
+      }
+
+      if (!video.dataset.src) {
+        video.dataset.mediaFailed = "true";
+        console.warn(`Footage card "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown"}" has no video source.`);
+        return;
+      }
+
+      video.preload = "metadata";
+      video.dataset.localFallback = "false";
+      video.dataset.sourceAttempt = "remote";
+      video.src = video.dataset.src;
+    }
+
+    function handleFootageVideoError(video) {
+      if (
+        video.dataset.sourceAttempt === "remote" &&
+        video.dataset.localSrc &&
+        video.dataset.localSrc !== video.dataset.src
+      ) {
+        video.dataset.sourceAttempt = "local";
+        video.dataset.localFallback = "true";
+        video.src = video.dataset.localSrc;
+        return;
+      }
+
+      video.dataset.mediaFailed = "true";
+      pendingFootageLoads.delete(video);
+      video.pause();
+      video.closest(".footage-card")?.classList.remove("is-playing");
+      console.warn(`Footage preview failed to load "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown footage"}". The card remains available to open in the viewer.`);
+    }
+
+    function scheduleFootagePreviewUpdate() {
+      if (footagePreviewFrame !== null) {
+        return;
+      }
+
+      footagePreviewFrame = window.requestAnimationFrame(() => {
+        footagePreviewFrame = null;
+        updateFootagePreviewPlayback();
+      });
+    }
+
+    function updateFootagePreviewPlayback() {
+      const visibleVideos = [...visibleFootageVideos]
+        .filter((video) => video.isConnected && video !== activeFootageViewer?.video)
+        .sort((first, second) => getFootageViewportDistance(first) - getFootageViewportDistance(second));
+      const maxPlayingVideos = window.matchMedia("(max-width: 600px)").matches ? 1 : 2;
+      const activeVideos = (
+        portfolioState.activeMode === "WORK" &&
+        !prefersReducedMotion &&
+        !document.hidden &&
+        !document.getElementById("projectViewer")?.open
+      )
+        ? visibleVideos.slice(0, maxPlayingVideos)
+        : [];
+      const activeVideoSet = new Set(activeVideos);
+
+      document.querySelectorAll(".footage-card video").forEach((video) => {
+        if (!activeVideoSet.has(video) && !video.paused) {
+          video.pause();
+        }
       });
 
-      videos.forEach((video) => thumbnailObserver.observe(video));
+      activeVideos.forEach((video) => {
+        if (!video.hasAttribute("src")) {
+          pendingFootageLoads.add(video);
+          scheduleFootageLoadDrain();
+        } else if (
+          video.dataset.mediaLoaded === "true" &&
+          video.paused &&
+          video.dataset.mediaFailed !== "true"
+        ) {
+          video.play().catch((error) => {
+            console.warn(`Footage preview playback was blocked for "${video.closest(".footage-card")?.getAttribute("aria-label") || "unknown footage"}".`, error);
+          });
+        }
+      });
+    }
+
+    function pauseFootagePreviews() {
+      visibleFootageVideos.clear();
+      pendingFootageLoads.clear();
+      document.querySelectorAll(".footage-card video").forEach((video) => {
+        if (!video.paused) {
+          video.pause();
+        }
+        video.closest(".footage-card")?.classList.remove("is-playing");
+      });
+    }
+
+    function scheduleFootageFallbackScan() {
+      if (footageFallbackScrollFrame !== null) {
+        return;
+      }
+
+      footageFallbackScrollFrame = window.requestAnimationFrame(() => {
+        footageFallbackScrollFrame = null;
+        const rootBounds = portfolioInterface.getBoundingClientRect();
+        const expandedTop = rootBounds.top - 300;
+        const expandedBottom = rootBounds.bottom + 300;
+
+        document.querySelectorAll(".footage-card video").forEach((video) => {
+          const bounds = video.getBoundingClientRect();
+          if (bounds.bottom >= expandedTop && bounds.top <= expandedBottom) {
+            if (!visibleFootageVideos.has(video)) {
+              scheduleFootageLoadFallback(video);
+            }
+          }
+
+          const visible = bounds.bottom > rootBounds.top && bounds.top < rootBounds.bottom;
+          if (visible) {
+            visibleFootageVideos.add(video);
+          } else {
+            visibleFootageVideos.delete(video);
+          }
+        });
+        scheduleFootagePreviewUpdate();
+      });
+    }
+
+    function scheduleFootageLoadFallback(video) {
+      if (
+        portfolioState.activeMode === "WORK" &&
+        !document.getElementById("projectViewer")?.open &&
+        !prefersReducedMotion &&
+        !video.hasAttribute("src") &&
+        video.dataset.mediaFailed !== "true"
+      ) {
+        pendingFootageLoads.add(video);
+        scheduleFootageLoadDrain();
+      }
+    }
+
+    function bindFootageViewerClose(viewer) {
+      if (viewer.dataset.mediaCloseBound === "true") {
+        return;
+      }
+
+      viewer.dataset.mediaCloseBound = "true";
+      viewer.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        closeFootageViewer();
+      });
     }
 
     function buildAboutView() {
@@ -3020,7 +3317,19 @@
     function renderPortfolioPanel() {
 
       if (portfolioState.activeMode === "WORK") {
-        portfolioPanel.innerHTML = buildWorkView();
+        if (cachedWorkView) {
+          portfolioPanel.replaceChildren(cachedWorkView);
+        } else {
+          portfolioPanel.innerHTML = buildWorkView();
+          cachedWorkView = portfolioPanel.firstElementChild;
+        }
+      }
+
+      if (portfolioState.activeMode !== "WORK") {
+        pauseFootagePreviews();
+        if (cachedWorkView?.parentElement === portfolioPanel) {
+          cachedWorkView.remove();
+        }
       }
 
       if (portfolioState.activeMode === "ABOUT") {
@@ -3069,21 +3378,28 @@
       const reviewCloseButtons = document.querySelectorAll(".review-close, .review-close-confirmation");
 
       footageCards.forEach((button) => {
+        if (button.dataset.viewerBound === "true") {
+          return;
+        }
+        button.dataset.viewerBound = "true";
         button.addEventListener("click", () => {
           openFootageViewer(button);
         });
       });
 
-      if (viewerCloseButton) {
+      if (viewerCloseButton && viewerCloseButton.dataset.mediaCloseBound !== "true") {
+        viewerCloseButton.dataset.mediaCloseBound = "true";
         viewerCloseButton.addEventListener("click", closeFootageViewer);
       }
 
-      if (viewer) {
+      if (viewer && viewer.dataset.mediaBackdropBound !== "true") {
+        viewer.dataset.mediaBackdropBound = "true";
         viewer.addEventListener("click", (event) => {
           if (event.target === viewer) {
             closeFootageViewer();
           }
         });
+        bindFootageViewerClose(viewer);
       }
 
       if (leaveReviewButton && reviewDialog) {
@@ -3106,6 +3422,10 @@
       }
 
       reviewCloseButtons.forEach((button) => {
+        if (button.dataset.reviewCloseBound === "true") {
+          return;
+        }
+        button.dataset.reviewCloseBound = "true";
         button.addEventListener("click", () => {
           if (reviewDialog && typeof reviewDialog.close === "function") {
             reviewDialog.close();
@@ -3126,7 +3446,8 @@
         });
       });
 
-      if (reviewDialog) {
+      if (reviewDialog && reviewDialog.dataset.backdropBound !== "true") {
+        reviewDialog.dataset.backdropBound = "true";
         reviewDialog.addEventListener("click", (event) => {
           if (event.target === reviewDialog && typeof reviewDialog.close === "function") {
             reviewDialog.close();
@@ -3134,7 +3455,8 @@
         });
       }
 
-      if (reviewForm) {
+      if (reviewForm && reviewForm.dataset.submitBound !== "true") {
+        reviewForm.dataset.submitBound = "true";
         reviewForm.addEventListener("submit", async (event) => {
           event.preventDefault();
 
