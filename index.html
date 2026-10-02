@@ -3940,6 +3940,7 @@
         if (
           portfolioState.activeMode === "WORK" &&
           event.deltaY < 0 &&
+          portfolioInterface.scrollTop > 0 &&
           scrollProgress > 0.01
         ) {
 
@@ -4013,6 +4014,7 @@
         if (
           portfolioState.activeMode === "WORK" &&
           deltaY > 0 &&
+          portfolioInterface.scrollTop > 0 &&
           scrollProgress > 0.01
         ) {
           touchStartY = touch.clientY;
