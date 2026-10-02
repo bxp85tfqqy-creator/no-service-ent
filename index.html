@@ -1041,7 +1041,7 @@
       display: block;
       width: 100%;
       aspect-ratio: 16 / 9;
-      object-fit: contain;
+      object-fit: cover;
       background: #111;
       filter: saturate(0.85) contrast(1.12) brightness(0.82);
       pointer-events: none;
@@ -2462,6 +2462,19 @@
         ".monitor-nav button"
       );
 
+    const mediaBaseUrl =
+      "https://pub-85713c5e4b7149d38ed3f7bde2e29a4d.r2.dev";
+    const remoteMediaNames = new Set([
+      "DANCE.mp4",
+      "DURUS.mp4",
+      "FIREWORKS.mp4",
+      "FLORIDA.mp4",
+      "Hair OIl.mp4",
+      "Sequence 01_1.mp4",
+      "display.mp4",
+      "truck.mp4"
+    ]);
+
     const projectData = [
       {
         title: "FOREVER",
@@ -2540,12 +2553,18 @@
     ];
 
     const footageData = projectData.flatMap((project) =>
-      project.videos.map((videoPath) => ({
-        path: videoPath,
-        name: videoPath.split("/").pop(),
-        project: project.title,
-        category: project.subtitle
-      }))
+      project.videos.map((videoPath) => {
+        const name = videoPath.split("/").pop();
+        return {
+          path: remoteMediaNames.has(name)
+            ? `${mediaBaseUrl}/${encodeURIComponent(name)}`
+            : videoPath,
+          localPath: videoPath,
+          name,
+          project: project.title,
+          category: project.subtitle
+        };
+      })
     );
 
     const portfolioViews = {
@@ -2603,7 +2622,7 @@
                 type="button"
                 data-footage-index="${footageData.indexOf(footage)}"
                 aria-label="Play ${footage.name}">
-                <video muted loop playsinline preload="none" src="${footage.path}"></video>
+                <video muted loop playsinline preload="metadata" src="${footage.path}" data-local-src="${footage.localPath}" data-thumbnail-time="${footage.name === "Hair OIl.mp4" ? 2 : ""}"></video>
               </button>
             `).join("")}
           </div>
@@ -2629,6 +2648,16 @@
       });
 
       viewerVideo.src = footage.path;
+      viewerVideo.dataset.localFallback = "false";
+      viewerVideo.onerror = () => {
+        if (viewerVideo.dataset.localFallback === "true") {
+          return;
+        }
+
+        viewerVideo.dataset.localFallback = "true";
+        viewerVideo.src = footage.localPath;
+        viewerVideo.play().catch(() => {});
+      };
       viewerVideo.muted = false;
       viewerVideo.volume = 1;
       viewerVideo.currentTime = 0;
@@ -2657,21 +2686,33 @@
 
     function prepareFootageThumbnails() {
       document.querySelectorAll(".footage-card video").forEach((video) => {
-        if (!video.src.includes("DURUS.mp4")) {
-          return;
-        }
+        video.addEventListener("error", () => {
+          if (video.dataset.localFallback === "true") {
+            return;
+          }
 
-        const setMiddleFrame = () => {
+          video.dataset.localFallback = "true";
+          video.src = video.dataset.localSrc;
+        }, { once: true });
+
+        const setThumbnailFrame = () => {
           if (Number.isFinite(video.duration) && video.duration > 0) {
-            video.currentTime = video.duration / 2;
+            const thumbnailTime = Number(video.dataset.thumbnailTime);
+            video.currentTime = video.dataset.thumbnailTime
+              ? Math.min(thumbnailTime, video.duration)
+              : video.duration / 2;
             video.dataset.thumbnailReady = "false";
           }
         };
 
+        video.addEventListener("seeked", () => {
+          video.dataset.thumbnailReady = "true";
+        }, { once: true });
+
         if (video.readyState >= 1) {
-          setMiddleFrame();
+          setThumbnailFrame();
         } else {
-          video.addEventListener("loadedmetadata", setMiddleFrame, { once: true });
+          video.addEventListener("loadedmetadata", setThumbnailFrame, { once: true });
         }
       });
     }
