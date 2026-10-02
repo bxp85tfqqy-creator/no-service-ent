@@ -1553,6 +1553,60 @@
     }
 
 
+    .viewer-controls {
+
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      color: rgba(232,231,223,0.82);
+      font-size: 8px;
+      letter-spacing: 0.1em;
+
+    }
+
+
+    .viewer-controls button {
+
+      padding: 8px 0;
+      color: rgba(255,187,107,0.92);
+      background: transparent;
+      border: 0;
+      font: inherit;
+      letter-spacing: inherit;
+      cursor: pointer;
+
+    }
+
+
+    .viewer-controls button:focus-visible,
+    .viewer-controls input:focus-visible {
+
+      outline: 1px solid rgba(255,157,46,0.9);
+      outline-offset: 3px;
+
+    }
+
+
+    #viewerSeek {
+
+      flex: 1 1 auto;
+      min-width: 70px;
+      accent-color: #ff9d2e;
+
+    }
+
+
+    #viewerTime {
+
+      min-width: 66px;
+      color: rgba(232,231,223,0.62);
+      text-align: center;
+      white-space: nowrap;
+
+    }
+
+
     .viewer-clips {
 
       display: grid;
@@ -1716,6 +1770,23 @@
         min-height: 0;
         max-height: 86vh;
         padding: 16px;
+      }
+
+      .viewer-controls {
+        display: grid;
+        grid-template-columns: auto 1fr auto auto;
+        gap: 6px 10px;
+      }
+
+      #viewerSeek {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        width: 100%;
+      }
+
+      #viewerTime {
+        min-width: 58px;
+        font-size: 7px;
       }
 
       .review-dialog {
@@ -2226,7 +2297,14 @@
 
     <dialog id="projectViewer" class="project-viewer" aria-label="Footage viewer">
       <button class="viewer-close" type="button" aria-label="Close footage viewer">CLOSE</button>
-      <video id="viewerVideo" class="viewer-video" controls autoplay playsinline></video>
+      <video id="viewerVideo" class="viewer-video" autoplay playsinline controlslist="nodownload"></video>
+      <div class="viewer-controls" aria-label="Footage playback controls">
+        <button id="viewerPlayToggle" type="button" aria-label="Pause footage">PAUSE</button>
+        <input id="viewerSeek" type="range" min="0" max="0" step="0.1" value="0" aria-label="Seek footage">
+        <span id="viewerTime" aria-live="off">0:00 / 0:00</span>
+        <button id="viewerMuteToggle" type="button" aria-label="Mute audio">MUTE</button>
+        <button id="viewerFullscreenToggle" type="button" aria-label="Enter fullscreen">FULL</button>
+      </div>
     </dialog>
 
     <dialog id="reviewDialog" class="review-dialog" aria-label="Leave a review">
@@ -2462,19 +2540,29 @@
         ".monitor-nav button"
       );
 
+    document.addEventListener("contextmenu", (event) => {
+      if (event.target instanceof HTMLVideoElement) {
+        event.preventDefault();
+      }
+    });
+
     const mediaBaseUrl =
       "https://pub-85713c5e4b7149d38ed3f7bde2e29a4d.r2.dev";
-    const remoteMediaNames = new Set([
-      "DANCE.mp4",
-      "DURUS.mp4",
-      "FIREWORKS.mp4",
-      "FLORIDA.mp4",
-      "Hair OIl.mp4",
-      "Sequence 01_1.mp4",
-      "TAZ2.mp4",
-      "TYCE YELLOW.mp4",
-      "display.mp4",
-      "truck.mp4"
+    const remoteMediaFiles = new Map([
+      ["DANCE.mp4", "DANCE.mp4"],
+      ["DURUS.mp4", "DURUS.mp4"],
+      ["FIREWORKS.mp4", "FIREWORKS.mp4"],
+      ["FLORIDA.mp4", "FLORIDA.mp4"],
+      ["Hair OIl.mp4", "Hair OIl.mp4"],
+      ["Mark & Anissa.mp4", "Mark & Anissa_1.mp4"],
+      ["Sequence 01.mp4", "Sequence 01mp4.mp4"],
+      ["Sequence 01_1.mp4", "Sequence 01_1.mp4"],
+      ["TAZ2.mp4", "TAZ2.mp4"],
+      ["td.mp4", "td_1.mp4"],
+      ["TYCE BLUE.mp4", "TYCE BLUE_1.mp4"],
+      ["TYCE YELLOW.mp4", "TYCE YELLOW.mp4"],
+      ["display.mp4", "display.mp4"],
+      ["truck.mp4", "truck.mp4"]
     ]);
 
     const projectData = [
@@ -2558,8 +2646,8 @@
       project.videos.map((videoPath) => {
         const name = videoPath.split("/").pop();
         return {
-          path: remoteMediaNames.has(name)
-            ? `${mediaBaseUrl}/${encodeURIComponent(name)}`
+          path: remoteMediaFiles.has(name)
+            ? `${mediaBaseUrl}/${encodeURIComponent(remoteMediaFiles.get(name))}`
             : videoPath,
           localPath: videoPath,
           name,
@@ -2684,6 +2772,87 @@
       if (typeof viewer.close === "function") {
         viewer.close();
       }
+    }
+
+    function formatViewerTime(time) {
+      if (!Number.isFinite(time)) {
+        return "0:00";
+      }
+
+      const minutes = Math.floor(time / 60);
+      const seconds = String(Math.floor(time % 60)).padStart(2, "0");
+      return `${minutes}:${seconds}`;
+    }
+
+    function updateViewerControls() {
+      const video = document.getElementById("viewerVideo");
+      const playToggle = document.getElementById("viewerPlayToggle");
+      const muteToggle = document.getElementById("viewerMuteToggle");
+      const fullscreenToggle = document.getElementById("viewerFullscreenToggle");
+      const seek = document.getElementById("viewerSeek");
+      const time = document.getElementById("viewerTime");
+
+      if (!video || !playToggle || !muteToggle || !fullscreenToggle || !seek || !time) {
+        return;
+      }
+
+      playToggle.textContent = video.paused ? "PLAY" : "PAUSE";
+      playToggle.setAttribute("aria-label", video.paused ? "Play footage" : "Pause footage");
+      muteToggle.textContent = video.muted ? "SOUND" : "MUTE";
+      muteToggle.setAttribute("aria-label", video.muted ? "Enable audio" : "Mute audio");
+      fullscreenToggle.textContent = document.fullscreenElement ? "EXIT" : "FULL";
+      fullscreenToggle.setAttribute("aria-label", document.fullscreenElement ? "Exit fullscreen" : "Enter fullscreen");
+      seek.max = String(Number.isFinite(video.duration) ? video.duration : 0);
+      seek.value = String(video.currentTime || 0);
+      time.textContent = `${formatViewerTime(video.currentTime)} / ${formatViewerTime(video.duration)}`;
+    }
+
+    function bindViewerPlaybackControls() {
+      const video = document.getElementById("viewerVideo");
+      const dialog = document.getElementById("projectViewer");
+      const playToggle = document.getElementById("viewerPlayToggle");
+      const muteToggle = document.getElementById("viewerMuteToggle");
+      const fullscreenToggle = document.getElementById("viewerFullscreenToggle");
+      const seek = document.getElementById("viewerSeek");
+
+      video.addEventListener("play", updateViewerControls);
+      video.addEventListener("pause", updateViewerControls);
+      video.addEventListener("timeupdate", updateViewerControls);
+      video.addEventListener("loadedmetadata", updateViewerControls);
+      video.addEventListener("volumechange", updateViewerControls);
+      document.addEventListener("fullscreenchange", updateViewerControls);
+
+      playToggle.addEventListener("click", () => {
+        if (video.paused) {
+          video.play().catch(() => {});
+        } else {
+          video.pause();
+        }
+      });
+
+      seek.addEventListener("input", () => {
+        if (Number.isFinite(video.duration)) {
+          video.currentTime = Number(seek.value);
+        }
+      });
+
+      muteToggle.addEventListener("click", () => {
+        video.muted = !video.muted;
+      });
+
+      fullscreenToggle.addEventListener("click", async () => {
+        try {
+          if (document.fullscreenElement) {
+            await document.exitFullscreen();
+          } else if (dialog.requestFullscreen) {
+            await dialog.requestFullscreen();
+          }
+        } catch (error) {
+          updateViewerControls();
+        }
+      });
+
+      updateViewerControls();
     }
 
     function prepareFootageThumbnails() {
@@ -3007,6 +3176,7 @@
     });
 
     renderPortfolioPanel();
+    bindViewerPlaybackControls();
 
 
     /* =====================================================
@@ -3825,7 +3995,7 @@
         const deltaY = touch.clientY - touchLastY;
         const elapsed = Math.max(16, now - lastTouchTimestamp);
 
-        touchVelocity = (deltaY / elapsed) * 16;
+        touchVelocity = ((touchLastY - touch.clientY) / elapsed) * 16;
 
         const screenDrag = (touchStartY - touch.clientY) / Math.max(window.innerHeight * 0.82, 1);
         targetScrollProgress = clamp01(touchStartProgress + (screenDrag * 1.35));
