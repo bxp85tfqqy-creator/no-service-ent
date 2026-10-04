@@ -2695,7 +2695,7 @@
     const reviewData = [];
 
     const reviewSubmissionConfig = {
-      endpoint: "https://script.google.com/macros/s/AKfycbyQpTib8bAmt0C-WNAstrGnH3SmjVsT9g2poI_8oPxKuPCa6jAvzbuukGJ6NUk6wAfG4Q/exec",
+      endpoint: "https://script.google.com/macros/s/AKfycby_UxWGGJCUtL3BKIwJXHWifq_P5ucAL1t5wdnEHkyynZ9HWL10gdig-9r-8TRC8LNSmg/exec",
       method: "POST"
     };
 
@@ -3318,7 +3318,7 @@
           </div>
 
           <div class="reviews-grid">
-            ${reviewData.length ? reviewData.map((review) => `
+            ${reviewData.map((review) => `
               <article class="review-card">
                 <div class="review-stars">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</div>
                 <div class="review-name">${escapeReviewHtml(review.name)}</div>
@@ -3326,9 +3326,7 @@
                 <p class="review-text">"${escapeReviewHtml(review.text)}"</p>
                 <div class="review-date">${escapeReviewHtml(review.date)}</div>
               </article>
-            `).join("") : `
-              <div class="review-empty">NO TRANSMISSIONS YET.</div>
-            `}
+            `).join("")}
           </div>
 
           <div class="contact-action">
@@ -3458,6 +3456,7 @@
       if (leaveReviewButton && reviewDialog) {
         leaveReviewButton.addEventListener("click", () => {
           reviewForm.reset();
+          delete reviewForm.dataset.requestId;
           if (reviewStatus) {
             reviewStatus.textContent = "";
             reviewStatus.classList.remove("error");
@@ -3512,6 +3511,14 @@
         reviewForm.dataset.submitBound = "true";
         reviewForm.addEventListener("submit", async (event) => {
           event.preventDefault();
+          if (reviewForm.dataset.submitting === "true") {
+            return;
+          }
+          reviewForm.dataset.submitting = "true";
+          const submitButton = reviewForm.querySelector('[type="submit"]');
+          if (submitButton) {
+            submitButton.disabled = true;
+          }
 
           const formData = new FormData(reviewForm);
           const clientName = String(formData.get("clientName") || "").trim();
@@ -3524,6 +3531,10 @@
               reviewStatus.textContent = "COMPLETE THE REQUIRED FIELDS.";
               reviewStatus.classList.add("error");
             }
+            reviewForm.dataset.submitting = "false";
+            if (submitButton) {
+              submitButton.disabled = false;
+            }
             return;
           }
 
@@ -3532,10 +3543,21 @@
               reviewStatus.textContent = "REVIEW SYSTEM NOT CONNECTED YET. ADD YOUR APPS SCRIPT URL.";
               reviewStatus.classList.add("error");
             }
+            reviewForm.dataset.submitting = "false";
+            if (submitButton) {
+              submitButton.disabled = false;
+            }
             return;
           }
 
+          if (!reviewForm.dataset.requestId) {
+            reviewForm.dataset.requestId = window.crypto?.randomUUID
+              ? window.crypto.randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          }
+
           const payload = {
+            requestId: reviewForm.dataset.requestId,
             clientName,
             projectType,
             rating,
@@ -3555,6 +3577,7 @@
               },
               body
             });
+            delete reviewForm.dataset.requestId;
 
             if (reviewFormPanel) {
               reviewFormPanel.hidden = true;
@@ -3570,6 +3593,11 @@
             if (reviewStatus) {
               reviewStatus.textContent = "TRANSMISSION FAILED. PLEASE TRY AGAIN.";
               reviewStatus.classList.add("error");
+            }
+          } finally {
+            reviewForm.dataset.submitting = "false";
+            if (submitButton) {
+              submitButton.disabled = false;
             }
           }
         });
