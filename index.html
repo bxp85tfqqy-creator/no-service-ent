@@ -2364,9 +2364,9 @@
         </div>
 
         <div id="reviewConfirmationPanel" class="review-confirmation-panel" hidden>
-          <div class="review-confirmation-kicker">REVIEW TRANSMITTED</div>
+          <div class="review-confirmation-kicker">REVIEW RECEIVED</div>
           <h3>THANK YOU</h3>
-          <p>THANK YOU FOR WORKING WITH NO SERVICE ENT.</p>
+          <p>YOUR REVIEW HAS BEEN RECEIVED AND IS AWAITING APPROVAL.</p>
           <button type="button" class="contact-key-button review-close-confirmation">CLOSE</button>
         </div>
       </div>
@@ -2686,15 +2686,71 @@
     let footageFallbackScrollBound = false;
     let footageDocumentVisibilityBound = false;
 
+    // =====================================================
+    // REVIEWS
+    // Google Apps Script endpoint receives submissions,
+    // emails you, and returns only APPROVED reviews.
+    // Paste your deployed Apps Script /exec URL below.
+    // =====================================================
     const reviewData = [];
 
     const reviewSubmissionConfig = {
-      endpoint: "",
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      }
+      endpoint: "https://script.google.com/macros/s/AKfycbyQpTib8bAmt0C-WNAstrGnH3SmjVsT9g2poI_8oPxKuPCa6jAvzbuukGJ6NUk6wAfG4Q/exec",
+      method: "POST"
     };
+
+    function escapeReviewHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatReviewDate(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return escapeReviewHtml(value);
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric"
+      }).toUpperCase();
+    }
+
+    function loadApprovedReviews() {
+      const endpoint = reviewSubmissionConfig.endpoint;
+      if (!endpoint || endpoint.includes("PASTE_YOUR_")) return;
+
+      const callbackName = `noServiceReviews_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const script = document.createElement("script");
+      const cleanup = () => {
+        try { delete window[callbackName]; } catch (_) {}
+        script.remove();
+      };
+
+      window[callbackName] = (reviews) => {
+        if (Array.isArray(reviews)) {
+          reviewData.splice(0, reviewData.length, ...reviews.map((review) => ({
+            name: review.name || review.clientName || "CLIENT",
+            projectType: review.projectType || "PROJECT",
+            rating: Math.min(5, Math.max(1, Number(review.rating) || 5)),
+            text: review.text || review.review || "",
+            date: formatReviewDate(review.date || review.submittedAt)
+          })));
+
+          if (portfolioState.activeMode === "REVIEWS") {
+            renderPortfolioPanel();
+          }
+        }
+        cleanup();
+      };
+
+      script.onerror = cleanup;
+      script.src = `${endpoint}${endpoint.includes("?") ? "&" : "?"}action=approved&callback=${encodeURIComponent(callbackName)}`;
+      document.head.appendChild(script);
+    }
 
     function getItemNumber(index) {
       return String(index + 1).padStart(2, "0");
@@ -3262,15 +3318,17 @@
           </div>
 
           <div class="reviews-grid">
-            ${reviewData.map((review) => `
+            ${reviewData.length ? reviewData.map((review) => `
               <article class="review-card">
                 <div class="review-stars">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</div>
-                <div class="review-name">${review.name}</div>
-                <div class="review-project">${review.projectType}</div>
-                <p class="review-text">"${review.text}"</p>
-                <div class="review-date">${review.date}</div>
+                <div class="review-name">${escapeReviewHtml(review.name)}</div>
+                <div class="review-project">${escapeReviewHtml(review.projectType)}</div>
+                <p class="review-text">"${escapeReviewHtml(review.text)}"</p>
+                <div class="review-date">${escapeReviewHtml(review.date)}</div>
               </article>
-            `).join("")}
+            `).join("") : `
+              <div class="review-empty">NO TRANSMISSIONS YET.</div>
+            `}
           </div>
 
           <div class="contact-action">
@@ -3354,6 +3412,9 @@
       });
 
       renderPortfolioPanel();
+      if (nextSection === "REVIEWS") {
+        loadApprovedReviews();
+      }
     }
 
     function bindPortfolioControls() {
@@ -3466,9 +3527,9 @@
             return;
           }
 
-          if (!reviewSubmissionConfig.endpoint) {
+          if (!reviewSubmissionConfig.endpoint || reviewSubmissionConfig.endpoint.includes("PASTE_YOUR_")) {
             if (reviewStatus) {
-              reviewStatus.textContent = "ENDPOINT NOT CONFIGURED. SET reviewSubmissionConfig.endpoint TO ENABLE LIVE SUBMISSIONS.";
+              reviewStatus.textContent = "REVIEW SYSTEM NOT CONNECTED YET. ADD YOUR APPS SCRIPT URL.";
               reviewStatus.classList.add("error");
             }
             return;
@@ -3484,10 +3545,15 @@
           };
 
           try {
+            // URL-encoded POST avoids a browser CORS preflight with Google Apps Script.
+            const body = new URLSearchParams(payload).toString();
             await fetch(reviewSubmissionConfig.endpoint, {
-              method: reviewSubmissionConfig.method,
-              headers: reviewSubmissionConfig.headers,
-              body: JSON.stringify(payload)
+              method: "POST",
+              mode: "no-cors",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+              },
+              body
             });
 
             if (reviewFormPanel) {
@@ -3502,7 +3568,7 @@
             }
           } catch (error) {
             if (reviewStatus) {
-              reviewStatus.textContent = "TRANSMISSION FAILED. CHECK THE ENDPOINT CONFIG.";
+              reviewStatus.textContent = "TRANSMISSION FAILED. PLEASE TRY AGAIN.";
               reviewStatus.classList.add("error");
             }
           }
@@ -3519,6 +3585,7 @@
 
     renderPortfolioPanel();
     bindViewerPlaybackControls();
+    loadApprovedReviews();
 
 
     /* =====================================================
